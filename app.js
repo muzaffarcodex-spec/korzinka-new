@@ -1120,6 +1120,19 @@ function appendTemplateSheetMerges(outputSheet, templateMerges, rowOffset) {
   });
 }
 
+function ensureSheetOrderMerges(sheet, rowNumber) {
+  const rowIndex = rowNumber - 1;
+  sheet['!merges'] = (sheet['!merges'] || []).filter((merge) => {
+    const sameRowMerge = merge.s.r === rowIndex && merge.e.r === rowIndex;
+    const touchesOrderArea = merge.s.c <= 20 && merge.e.c >= 0;
+    return !(sameRowMerge && touchesOrderArea);
+  });
+  sheet['!merges'].push(
+    { s: { r: rowIndex, c: 0 }, e: { r: rowIndex, c: 6 } },
+    { s: { r: rowIndex, c: 7 }, e: { r: rowIndex, c: 20 } },
+  );
+}
+
 function fillInvoiceSheetCopy(sheet, offset, store, invoiceNumber) {
   const titleRow = 1 + offset;
   const contractRow = 2 + offset;
@@ -1136,6 +1149,7 @@ function fillInvoiceSheetCopy(sheet, offset, store, invoiceNumber) {
   const orderNumberText = formatOrderNumbers(store);
 
   const monthText = formatRussianInvoiceMonth(date);
+  ensureSheetOrderMerges(sheet, contractRow);
   setSheetCell(sheet, `A${titleRow}`, store.name);
   setSheetCell(sheet, `H${titleRow}`, `СЧЕТ-ФАКТУРА № ${invoiceNo}                         от           ${monthText}г.`);
   setSheetCell(sheet, `A${contractRow}`, orderNumberText);
@@ -1365,6 +1379,52 @@ function appendTemplateXmlMerges(mergeCells, templateMerges, rowOffset) {
   });
 }
 
+function ensureXmlOrderMerges(documentXml, rowNumber) {
+  const namespace = documentXml.documentElement.namespaceURI;
+  let mergeCells = documentXml.getElementsByTagNameNS(namespace, 'mergeCells')[0];
+  if (!mergeCells) {
+    const worksheet = documentXml.documentElement;
+    mergeCells = documentXml.createElementNS(namespace, 'mergeCells');
+    worksheet.appendChild(mergeCells);
+  }
+
+  Array.from(mergeCells.children).forEach((mergeCell) => {
+    if (mergeCell.localName !== 'mergeCell') return;
+    const range = parseCellRange(mergeCell.getAttribute('ref'));
+    if (!range) return;
+    const sameRowMerge = range.start.row === rowNumber && range.end.row === rowNumber;
+    const touchesOrderArea = range.start.column <= 21 && range.end.column >= 1;
+    if (sameRowMerge && touchesOrderArea) mergeCells.removeChild(mergeCell);
+  });
+
+  ['A:G', 'H:U'].forEach((columns) => {
+    const mergeCell = documentXml.createElementNS(namespace, 'mergeCell');
+    const [startColumn, endColumn] = columns.split(':');
+    mergeCell.setAttribute('ref', `${startColumn}${rowNumber}:${endColumn}${rowNumber}`);
+    mergeCells.appendChild(mergeCell);
+  });
+  mergeCells.setAttribute('count', String(Array.from(mergeCells.children).filter((child) => child.localName === 'mergeCell').length));
+}
+
+function parseCellRange(ref) {
+  const [start, end = start] = String(ref || '').split(':');
+  const startCell = parseCellAddress(start);
+  const endCell = parseCellAddress(end);
+  return startCell && endCell ? { start: startCell, end: endCell } : null;
+}
+
+function parseCellAddress(address) {
+  const match = String(address || '').match(/^\$?([A-Z]{1,3})\$?(\d+)$/);
+  if (!match) return null;
+  return { column: columnNameToNumber(match[1]), row: Number(match[2]) };
+}
+
+function columnNameToNumber(columnName) {
+  return String(columnName).split('').reduce((total, char) => (
+    total * 26 + char.charCodeAt(0) - 64
+  ), 0);
+}
+
 function shiftCellAddress(address, rowOffset) {
   return String(address).replace(/(\$?[A-Z]{1,3})(\$?)(\d+)/, (match, column, absolute, row) => (
     `${column}${absolute}${Number(row) + rowOffset}`
@@ -1398,6 +1458,7 @@ function fillInvoiceXmlCopy(documentXml, cellMap, offset, store, invoiceNumber) 
   const orderNumberText = formatOrderNumbers(store);
 
   const monthText = formatRussianInvoiceMonth(date);
+  ensureXmlOrderMerges(documentXml, contractRow);
   setXmlCell(documentXml, cellMap, `A${titleRow}`, store.name);
   setXmlCell(documentXml, cellMap, `H${titleRow}`, `СЧЕТ-ФАКТУРА № ${invoiceNo}                         от           ${monthText}г.`);
   setXmlCell(documentXml, cellMap, `A${contractRow}`, orderNumberText);
